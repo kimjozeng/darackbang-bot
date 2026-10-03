@@ -19,29 +19,28 @@ from database.db import (
 
 
 LEVEL_RAIDS = {
-    1730: [
-        "세르카 하드",
-        "종막 하드",
-        "4막 하드",
-        "지평의 성당 2단계",
-    ],
-    1750: [
-        "벨가르딘 노말",
-        "지평의 성당 3단계",
-        "세르카 나이트메어",
-        "종막 하드",
-    ],
-    1780: [
-        "벨가르딘 하드",
-        "벨가르딘 나이트메어",
-        "지평의 성당 3단계",
-        "세르카 나이트메어",
-    ],
-    1800: [
-        "벨가르딘 나이트메어",
-        "지평의 성당 3단계",
-        "상위 숙제",
-    ],
+    1730: {
+        "세르카": ["하드"],
+        "종막": ["하드"],
+        "4막": ["하드"],
+        "지평의 성당": ["2단계"],
+    },
+    1750: {
+        "벨가르딘": ["노말"],
+        "지평의 성당": ["3단계"],
+        "세르카": ["나이트메어"],
+        "종막": ["하드"],
+    },
+    1780: {
+        "벨가르딘": ["하드", "나이트메어"],
+        "지평의 성당": ["3단계"],
+        "세르카": ["나이트메어"],
+    },
+    1800: {
+        "벨가르딘": ["나이트메어"],
+        "지평의 성당": ["3단계"],
+        "상위 숙제": ["기타"],
+    },
 }
 
 
@@ -142,10 +141,11 @@ class RecruitView(discord.ui.View):
 
 
 class RecruitModal(discord.ui.Modal):
-    def __init__(self, base_level: int, raid_name: str | None):
+    def __init__(self, base_level: int, raid_name: str | None, fixed_difficulty: str | None = None):
         super().__init__(title=f"{base_level}+ 레이드 모집")
         self.base_level = base_level
         self.fixed_raid_name = raid_name
+        self.fixed_difficulty = fixed_difficulty
 
         if raid_name is None:
             self.raid = discord.ui.TextInput(
@@ -157,11 +157,14 @@ class RecruitModal(discord.ui.Modal):
         else:
             self.raid = None
 
-        self.difficulty = discord.ui.TextInput(
-            label="난이도",
-            placeholder="예: 노말 / 하드 / 나이트메어",
-            max_length=30,
-        )
+        if fixed_difficulty is None:
+            self.difficulty = discord.ui.TextInput(
+                label="난이도",
+                placeholder="예: 노말 / 하드 / 나이트메어",
+                max_length=30,
+            )
+        else:
+            self.difficulty = None
         self.experience = discord.ui.TextInput(
             label="숙련도",
             placeholder="트라이 / 반숙 / 숙련 / 빡숙",
@@ -179,7 +182,8 @@ class RecruitModal(discord.ui.Modal):
             max_length=300,
         )
 
-        self.add_item(self.difficulty)
+        if self.difficulty is not None:
+            self.add_item(self.difficulty)
         self.add_item(self.experience)
         self.add_item(self.item_level)
         self.add_item(self.extra)
@@ -219,7 +223,7 @@ class RecruitModal(discord.ui.Modal):
             channel_id=interaction.channel_id,
             creator_id=interaction.user.id,
             raid=raid_name,
-            difficulty=str(self.difficulty).strip(),
+            difficulty=self.fixed_difficulty or str(self.difficulty).strip(),
             experience=str(self.experience).strip(),
             min_item_level=min_ilvl,
             dealer_limit=dealer_limit,
@@ -249,6 +253,26 @@ class RecruitModal(discord.ui.Modal):
         await set_message_refs(recruit_id, msg.id, thread.id if thread else None)
 
 
+class DifficultyButton(discord.ui.Button):
+    def __init__(self, base_level: int, raid_name: str, difficulty: str):
+        super().__init__(label=difficulty, style=discord.ButtonStyle.primary)
+        self.base_level = base_level
+        self.raid_name = raid_name
+        self.difficulty = difficulty
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            RecruitModal(self.base_level, self.raid_name, self.difficulty)
+        )
+
+
+class DifficultyView(discord.ui.View):
+    def __init__(self, base_level: int, raid_name: str, difficulties: list[str]):
+        super().__init__(timeout=180)
+        for difficulty in difficulties:
+            self.add_item(DifficultyButton(base_level, raid_name, difficulty))
+
+
 class RaidButton(discord.ui.Button):
     def __init__(self, base_level: int, raid_name: str | None):
         label = "기타" if raid_name is None else raid_name
@@ -258,8 +282,24 @@ class RaidButton(discord.ui.Button):
         self.raid_name = raid_name
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(
-            RecruitModal(self.base_level, self.raid_name)
+        if self.raid_name is None:
+            return await interaction.response.send_modal(
+                RecruitModal(self.base_level, None)
+            )
+
+        difficulties = LEVEL_RAIDS[self.base_level][self.raid_name]
+        if len(difficulties) == 1:
+            return await interaction.response.send_modal(
+                RecruitModal(self.base_level, self.raid_name, difficulties[0])
+            )
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title=f"⚔️ {self.raid_name}",
+                description="난이도를 선택해 주세요.",
+            ),
+            view=DifficultyView(self.base_level, self.raid_name, difficulties),
+            ephemeral=True,
         )
 
 
