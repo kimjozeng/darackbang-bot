@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -14,6 +16,33 @@ from database.db import (
     set_message_refs,
     list_open_recruits,
 )
+
+
+LEVEL_RAIDS = {
+    1730: [
+        "세르카 하드",
+        "종막 하드",
+        "4막 하드",
+        "지평의 성당 2단계",
+    ],
+    1750: [
+        "벨가르딘 노말",
+        "지평의 성당 3단계",
+        "세르카 나이트메어",
+        "종막 하드",
+    ],
+    1780: [
+        "벨가르딘 하드",
+        "벨가르딘 나이트메어",
+        "지평의 성당 3단계",
+        "세르카 나이트메어",
+    ],
+    1800: [
+        "벨가르딘 나이트메어",
+        "지평의 성당 3단계",
+        "상위 숙제",
+    ],
+}
 
 
 def build_embed(recruit: dict, members: list[dict]) -> discord.Embed:
@@ -68,12 +97,15 @@ class RecruitView(discord.ui.View):
         recruit = await get_recruit(self.recruit_id)
         if not recruit or recruit["status"] != "open":
             return await interaction.response.send_message("이미 마감된 모집입니다.", ephemeral=True)
+
         members = await list_members(self.recruit_id)
         same_pos_count = sum(1 for m in members if m["position"] == position)
         limit = recruit["dealer_limit"] if position == "dealer" else recruit["support_limit"]
         existing = next((m for m in members if m["user_id"] == interaction.user.id), None)
+
         if not existing and same_pos_count >= limit:
             return await interaction.response.send_message("해당 포지션 정원이 찼어요.", ephemeral=True)
+
         await join_recruit(self.recruit_id, interaction.user.id, position)
         await interaction.response.send_message("참여 처리했어요.", ephemeral=True)
         await self.refresh(interaction)
@@ -97,47 +129,96 @@ class RecruitView(discord.ui.View):
         recruit = await get_recruit(self.recruit_id)
         if not recruit:
             return await interaction.response.send_message("모집 정보를 찾지 못했어요.", ephemeral=True)
+
         if interaction.user.id != recruit["creator_id"] and not interaction.user.guild_permissions.manage_guild:
-            return await interaction.response.send_message("공대장 또는 관리자만 마감할 수 있어요.", ephemeral=True)
+            return await interaction.response.send_message(
+                "공대장 또는 관리자만 마감할 수 있어요.",
+                ephemeral=True,
+            )
+
         await close_recruit(self.recruit_id)
         await interaction.response.send_message("모집을 마감했어요.", ephemeral=True)
         await self.refresh(interaction)
 
 
-class RecruitModal(discord.ui.Modal, title="다락방 레이드 모집"):
-    raid = discord.ui.TextInput(label="레이드", placeholder="예: 카멘")
-    difficulty = discord.ui.TextInput(label="난이도", placeholder="예: 하드")
-    experience = discord.ui.TextInput(label="숙련도", placeholder="트라이 / 반숙 / 숙련 / 빡숙")
-    item_level = discord.ui.TextInput(label="최소 아이템 레벨", placeholder="예: 1700")
-    extra = discord.ui.TextInput(
-        label="출발시간 / 인원 / 메모",
-        placeholder="예: 21:00 | 딜6 서폿2 | 숙제팟, 듣코 가능",
-        style=discord.TextStyle.paragraph,
-    )
+class RecruitModal(discord.ui.Modal):
+    def __init__(self, base_level: int, raid_name: str | None):
+        super().__init__(title=f"{base_level}+ 레이드 모집")
+        self.base_level = base_level
+        self.fixed_raid_name = raid_name
+
+        if raid_name is None:
+            self.raid = discord.ui.TextInput(
+                label="콘텐츠명",
+                placeholder="예: 카멘, 에기르, 길드 레이드 등",
+                max_length=50,
+            )
+            self.add_item(self.raid)
+        else:
+            self.raid = None
+
+        self.difficulty = discord.ui.TextInput(
+            label="난이도",
+            placeholder="예: 노말 / 하드 / 나이트메어",
+            max_length=30,
+        )
+        self.experience = discord.ui.TextInput(
+            label="숙련도",
+            placeholder="트라이 / 반숙 / 숙련 / 빡숙",
+            max_length=30,
+        )
+        self.item_level = discord.ui.TextInput(
+            label="최소 아이템 레벨",
+            default=str(base_level),
+            max_length=10,
+        )
+        self.extra = discord.ui.TextInput(
+            label="출발시간 / 인원 / 메모",
+            placeholder="예: 21:00 | 딜6 서폿2 | 숙제팟, 듣코 가능",
+            style=discord.TextStyle.paragraph,
+            max_length=300,
+        )
+
+        self.add_item(self.difficulty)
+        self.add_item(self.experience)
+        self.add_item(self.item_level)
+        self.add_item(self.extra)
 
     async def on_submit(self, interaction: discord.Interaction):
+        raid_name = self.fixed_raid_name or str(self.raid).strip()
+
         parts = [p.strip() for p in str(self.extra).split("|")]
         start_time = parts[0] if parts else "미정"
         dealer_limit, support_limit = 6, 2
         memo = " | ".join(parts[2:]) if len(parts) >= 3 else (parts[1] if len(parts) == 2 else "")
+
         if len(parts) >= 2:
-            import re
             d = re.search(r"딜\s*(\d+)", parts[1])
             s = re.search(r"서폿?\s*(\d+)", parts[1])
             if d:
                 dealer_limit = int(d.group(1))
             if s:
                 support_limit = int(s.group(1))
+
         try:
             min_ilvl = int(str(self.item_level).replace(",", "").strip())
         except ValueError:
-            return await interaction.response.send_message("아이템 레벨은 숫자로 입력해 주세요.", ephemeral=True)
+            return await interaction.response.send_message(
+                "아이템 레벨은 숫자로 입력해 주세요.",
+                ephemeral=True,
+            )
+
+        if dealer_limit < 0 or support_limit < 0 or dealer_limit + support_limit <= 0:
+            return await interaction.response.send_message(
+                "모집 인원을 다시 확인해 주세요.",
+                ephemeral=True,
+            )
 
         recruit_id = await create_recruit(
             guild_id=interaction.guild_id,
             channel_id=interaction.channel_id,
             creator_id=interaction.user.id,
-            raid=str(self.raid).strip(),
+            raid=raid_name,
             difficulty=str(self.difficulty).strip(),
             experience=str(self.experience).strip(),
             min_item_level=min_ilvl,
@@ -146,41 +227,108 @@ class RecruitModal(discord.ui.Modal, title="다락방 레이드 모집"):
             start_time=start_time,
             memo=memo,
         )
+
         recruit = await get_recruit(recruit_id)
         await interaction.response.send_message(
-            embed=build_embed(recruit, []), view=RecruitView(recruit_id),
+            embed=build_embed(recruit, []),
+            view=RecruitView(recruit_id),
         )
         msg = await interaction.original_response()
+
         thread = None
         try:
-            thread = await msg.create_thread(name=f"{recruit['raid']} {recruit['difficulty']} | {recruit['start_time']}")
-            await thread.send(f"공대장 <@{recruit['creator_id']}>님이 생성한 모집 스레드입니다.")
+            thread = await msg.create_thread(
+                name=f"{recruit['raid']} {recruit['difficulty']} | {recruit['start_time']}"
+            )
+            await thread.send(
+                f"공대장 <@{recruit['creator_id']}>님이 생성한 모집 스레드입니다."
+            )
         except (discord.Forbidden, discord.HTTPException):
             pass
+
         await set_message_refs(recruit_id, msg.id, thread.id if thread else None)
+
+
+class RaidButton(discord.ui.Button):
+    def __init__(self, base_level: int, raid_name: str | None):
+        label = "기타" if raid_name is None else raid_name
+        style = discord.ButtonStyle.secondary if raid_name is None else discord.ButtonStyle.primary
+        super().__init__(label=label, style=style)
+        self.base_level = base_level
+        self.raid_name = raid_name
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            RecruitModal(self.base_level, self.raid_name)
+        )
+
+
+class LevelRaidView(discord.ui.View):
+    def __init__(self, base_level: int):
+        super().__init__(timeout=180)
+        for raid_name in LEVEL_RAIDS[base_level]:
+            self.add_item(RaidButton(base_level, raid_name))
+        self.add_item(RaidButton(base_level, None))
 
 
 class RecruitPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="레이드 모집", emoji="⚔️", style=discord.ButtonStyle.primary, custom_id="darack:panel:create")
-    async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RecruitModal())
+    async def show_level(self, interaction: discord.Interaction, level: int):
+        raids = "\n".join(f"• {name}" for name in LEVEL_RAIDS[level])
+        embed = discord.Embed(
+            title=f"🏠 다락방 {level}+ 모집",
+            description=(
+                f"{raids}\n• 기타\n\n"
+                "원하는 콘텐츠를 눌러 모집을 작성해 주세요."
+            ),
+        )
+        await interaction.response.send_message(
+            embed=embed,
+            view=LevelRaidView(level),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="1730+", style=discord.ButtonStyle.secondary, custom_id="darack:panel:1730")
+    async def level_1730(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.show_level(interaction, 1730)
+
+    @discord.ui.button(label="1750+", style=discord.ButtonStyle.primary, custom_id="darack:panel:1750")
+    async def level_1750(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.show_level(interaction, 1750)
+
+    @discord.ui.button(label="1780+", style=discord.ButtonStyle.success, custom_id="darack:panel:1780")
+    async def level_1780(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.show_level(interaction, 1780)
+
+    @discord.ui.button(label="1800+", style=discord.ButtonStyle.danger, custom_id="darack:panel:1800")
+    async def level_1800(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.show_level(interaction, 1800)
 
 
 class RecruitCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="모집패널", description="다락방 로스트아크 모집 패널을 생성합니다.")
+    @app_commands.command(
+        name="모집패널",
+        description="다락방 로스트아크 모집 패널을 생성합니다.",
+    )
     @app_commands.default_permissions(manage_guild=True)
     async def panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="🏠 다락방 로스트아크 파티 모집",
-            description="버튼을 눌러 레이드 모집을 생성해 주세요.",
+            description=(
+                "아이템 레벨 구간을 선택해 주세요.\n\n"
+                "1730+ / 1750+ / 1780+ / 1800+\n"
+                "각 구간에는 주요 레이드와 **기타** 모집이 준비되어 있습니다."
+            ),
         )
-        await interaction.response.send_message(embed=embed, view=RecruitPanelView())
+        await interaction.response.send_message(
+            embed=embed,
+            view=RecruitPanelView(),
+        )
 
     async def restore_views(self):
         self.bot.add_view(RecruitPanelView())
