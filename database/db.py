@@ -105,3 +105,32 @@ async def close_recruit(recruit_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE recruits SET status='closed' WHERE id=?", (recruit_id,))
         await db.commit()
+
+
+async def update_recruit(
+    recruit_id: int,
+    *,
+    experience: str,
+    min_item_level: int,
+    dealer_limit: int,
+    support_limit: int,
+    start_time: str,
+    memo: str,
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE recruits
+            SET experience=?, min_item_level=?, dealer_limit=?, support_limit=?,
+                start_time=?, memo=?
+            WHERE id=?""",
+            (
+                experience,
+                min_item_level,
+                dealer_limit,
+                support_limit,
+                start_time,
+                memo,
+                recruit_id,
+            ),
+        )
+        await db.commit()

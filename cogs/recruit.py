@@ -13,6 +13,7 @@ from database.db import (
     join_recruit,
     leave_recruit,
     close_recruit,
+    update_recruit,
     set_message_refs,
     list_open_recruits,
 )
@@ -123,6 +124,23 @@ class RecruitView(discord.ui.View):
         await interaction.response.send_message("참여를 취소했어요.", ephemeral=True)
         await self.refresh(interaction)
 
+    @discord.ui.button(label="모집 수정", emoji="✏️", style=discord.ButtonStyle.secondary, custom_id="edit")
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = await get_recruit(self.recruit_id)
+        if not recruit:
+            return await interaction.response.send_message(
+                "모집 정보를 찾지 못했어요.",
+                ephemeral=True,
+            )
+
+        if interaction.user.id != recruit["creator_id"] and not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message(
+                "공대장 또는 관리자만 수정할 수 있어요.",
+                ephemeral=True,
+            )
+
+        await interaction.response.send_modal(EditRecruitModal(recruit))
+
     @discord.ui.button(label="모집 마감", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = await get_recruit(self.recruit_id)
@@ -138,6 +156,99 @@ class RecruitView(discord.ui.View):
         await close_recruit(self.recruit_id)
         await interaction.response.send_message("모집을 마감했어요.", ephemeral=True)
         await self.refresh(interaction)
+
+
+class EditRecruitModal(discord.ui.Modal):
+    def __init__(self, recruit: dict):
+        super().__init__(title=f"모집 수정 #{recruit['id']}")
+        self.recruit_id = recruit["id"]
+
+        self.experience = discord.ui.TextInput(
+            label="숙련도",
+            default=recruit["experience"],
+            max_length=30,
+        )
+        self.item_level = discord.ui.TextInput(
+            label="최소 아이템 레벨",
+            default=str(recruit["min_item_level"]),
+            max_length=10,
+        )
+        self.start_time = discord.ui.TextInput(
+            label="출발 시간",
+            default=recruit["start_time"],
+            max_length=40,
+        )
+        self.party_size = discord.ui.TextInput(
+            label="모집 인원",
+            default=f"딜{recruit['dealer_limit']} 서폿{recruit['support_limit']}",
+            placeholder="예: 딜6 서폿2",
+            max_length=40,
+        )
+        self.memo = discord.ui.TextInput(
+            label="메모",
+            default=recruit.get("memo") or "",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=300,
+        )
+
+        self.add_item(self.experience)
+        self.add_item(self.item_level)
+        self.add_item(self.start_time)
+        self.add_item(self.party_size)
+        self.add_item(self.memo)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            min_ilvl = int(str(self.item_level).replace(",", "").strip())
+        except ValueError:
+            return await interaction.response.send_message(
+                "아이템 레벨은 숫자로 입력해 주세요.",
+                ephemeral=True,
+            )
+
+        d = re.search(r"딜\s*(\d+)", str(self.party_size))
+        s = re.search(r"서폿?\s*(\d+)", str(self.party_size))
+        if not d or not s:
+            return await interaction.response.send_message(
+                "모집 인원은 '딜6 서폿2' 형식으로 입력해 주세요.",
+                ephemeral=True,
+            )
+
+        dealer_limit = int(d.group(1))
+        support_limit = int(s.group(1))
+        if dealer_limit < 0 or support_limit < 0 or dealer_limit + support_limit <= 0:
+            return await interaction.response.send_message(
+                "모집 인원을 다시 확인해 주세요.",
+                ephemeral=True,
+            )
+
+        await update_recruit(
+            self.recruit_id,
+            experience=str(self.experience).strip(),
+            min_item_level=min_ilvl,
+            dealer_limit=dealer_limit,
+            support_limit=support_limit,
+            start_time=str(self.start_time).strip(),
+            memo=str(self.memo).strip(),
+        )
+
+        recruit = await get_recruit(self.recruit_id)
+        members = await list_members(self.recruit_id)
+        total = len(members)
+        max_total = recruit["dealer_limit"] + recruit["support_limit"]
+        should_close = recruit["status"] != "open" or total >= max_total
+
+        if should_close and recruit["status"] == "open":
+            await close_recruit(self.recruit_id)
+            recruit["status"] = "closed"
+
+        await interaction.response.edit_message(
+            embed=build_embed(recruit, members),
+            view=RecruitView(self.recruit_id, disabled=should_close),
+        )
+
+
 
 
 class RecruitModal(discord.ui.Modal):
