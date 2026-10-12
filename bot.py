@@ -14,13 +14,14 @@ intents.guilds = True
 intents.members = True
 
 
-class DarackbangBot(commands.Bot):
+class MokokoMateBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
         await init_db()
         await self.load_extension("cogs.recruit")
+        await self.load_extension("cogs.verification")
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
             self.tree.copy_global_to(guild=guild)
@@ -29,11 +30,11 @@ class DarackbangBot(commands.Bot):
             await self.tree.sync()
 
 
-bot = DarackbangBot()
+bot = MokokoMateBot()
 
 @bot.event
 async def on_ready():
-    print(f"[다락방] 로그인 완료: {bot.user} ({bot.user.id})")
+    print(f"[모코코 메이트] 로그인 완료: {bot.user} ({bot.user.id})")
 
 if __name__ == "__main__":
     if not TOKEN:
