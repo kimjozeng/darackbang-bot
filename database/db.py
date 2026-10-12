@@ -1,7 +1,7 @@
 import os
 import aiosqlite
 
-DB_PATH = os.getenv("DB_PATH", "darackbang.db")
+DB_PATH = os.getenv("DB_PATH", "mokoko_mate.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS recruits (
@@ -31,6 +31,29 @@ CREATE TABLE IF NOT EXISTS recruit_members (
     joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(recruit_id, user_id),
     FOREIGN KEY(recruit_id) REFERENCES recruits(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS guild_settings (
+    guild_id INTEGER PRIMARY KEY,
+    verified_role_id INTEGER,
+    pending_role_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS server_roles (
+    guild_id INTEGER NOT NULL,
+    server_name TEXT NOT NULL,
+    role_id INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, server_name),
+    UNIQUE (guild_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS verified_users (
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    character_name TEXT NOT NULL,
+    server_name TEXT NOT NULL,
+    verified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (guild_id, user_id)
 );
 """
 
@@ -132,5 +155,56 @@ async def update_recruit(
                 memo,
                 recruit_id,
             ),
+        )
+        await db.commit()
+
+
+async def set_auth_roles(guild_id: int, verified_role_id: int, pending_role_id: int | None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO guild_settings (guild_id, verified_role_id, pending_role_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                verified_role_id=excluded.verified_role_id,
+                pending_role_id=excluded.pending_role_id""",
+            (guild_id, verified_role_id, pending_role_id),
+        )
+        await db.commit()
+
+async def get_guild_settings(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM guild_settings WHERE guild_id=?", (guild_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else {"guild_id": guild_id, "verified_role_id": None, "pending_role_id": None}
+
+async def set_server_role(guild_id: int, server_name: str, role_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO server_roles (guild_id, server_name, role_id) VALUES (?, ?, ?)
+            ON CONFLICT(guild_id, server_name) DO UPDATE SET role_id=excluded.role_id""",
+            (guild_id, server_name, role_id),
+        )
+        await db.commit()
+
+async def get_server_roles(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT server_name, role_id FROM server_roles WHERE guild_id=? ORDER BY server_name",
+            (guild_id,),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+async def save_verified_user(guild_id: int, user_id: int, character_name: str, server_name: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO verified_users (guild_id, user_id, character_name, server_name)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                character_name=excluded.character_name,
+                server_name=excluded.server_name,
+                verified_at=CURRENT_TIMESTAMP""",
+            (guild_id, user_id, character_name, server_name),
         )
         await db.commit()
