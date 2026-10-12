@@ -345,8 +345,10 @@ class RecruitModal(discord.ui.Modal):
 
         recruit = await get_recruit(recruit_id)
         await interaction.response.send_message(
+            content="@everyone",
             embed=build_embed(recruit, []),
             view=RecruitView(recruit_id),
+            allowed_mentions=discord.AllowedMentions(everyone=True),
         )
         msg = await interaction.original_response()
 
@@ -429,7 +431,7 @@ class RecruitPanelView(discord.ui.View):
     async def show_level(self, interaction: discord.Interaction, level: int):
         raids = "\n".join(f"• {name}" for name in LEVEL_RAIDS[level])
         embed = discord.Embed(
-            title=f"🏠 다락방 {level}+ 모집",
+            title=f"🌱 모코코 메이트 {level}+ 모집",
             description=(
                 f"{raids}\n• 기타\n\n"
                 "원하는 콘텐츠를 눌러 모집을 작성해 주세요."
@@ -464,12 +466,12 @@ class RecruitCog(commands.Cog):
 
     @app_commands.command(
         name="모집패널",
-        description="다락방 로스트아크 모집 패널을 생성합니다.",
+        description="모코코 메이트 로스트아크 모집 패널을 생성합니다.",
     )
     @app_commands.default_permissions(manage_guild=True)
     async def panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="🏠 다락방 로스트아크 파티 모집",
+            title="🌱 모코코 메이트 로스트아크 파티 모집",
             description=(
                 "아이템 레벨 구간을 선택해 주세요.\n\n"
                 "1730+ / 1750+ / 1780+ / 1800+\n"
